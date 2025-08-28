@@ -1,10 +1,12 @@
 const express = require('express');
-const { create } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode');
 const path = require('path');
 const fs = require('fs');
-const mongoose = require('mongoose');
 require('dotenv').config();
+
+// Import database
+const db = require('./database');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -13,97 +15,37 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.static('public'));
 
-// Import config
-const { OWNER_NUMBER } = require('./config/settings');
-
 // Socket untuk mengirim QR ke frontend
 const http = require('http').createServer(app);
 const io = require('socket.io')(http);
 
 // State management
-let sessions = new Map();
 let sock = null;
-
-// Connect to MongoDB
-const connectDB = async () => {
-  try {
-    const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/t-ai';
-    await mongoose.connect(MONGODB_URI);
-    console.log('✅ MongoDB Connected successfully');
-  } catch (error) {
-    console.error('❌ MongoDB connection error:', error.message);
-    // Jangan exit, biarkan bot tetap berjalan tanpa database
-  }
-};
-
-// User Schema
-const userSchema = new mongoose.Schema({
-  userId: {
-    type: String,
-    required: true,
-    unique: true
-  },
-  name: String,
-  role: {
-    type: String,
-    default: 'USER',
-    enum: ['USER', 'ADMIN', 'OWNER']
-  },
-  banned: {
-    type: Boolean,
-    default: false
-  },
-  banReason: String,
-  createdAt: {
-    type: Date,
-    default: Date.now
-  },
-  tenantId: String,
-  subscription: {
-    type: String,
-    default: 'free'
-  }
-});
-
-const User = mongoose.model('User', userSchema);
+let qrGenerated = false;
 
 // Inisialisasi WhatsApp
 async function initWhatsApp() {
-  // Buat folder sessions jika belum ada
-  if (!fs.existsSync('./sessions')) {
-    fs.mkdirSync('./sessions', { recursive: true });
-  }
+  const { state, saveCreds } = await useMultiFileAuthState('./sessions');
   
-  let state = {};
-  // Coba load session jika ada
-  if (fs.existsSync('./sessions/session.json')) {
-    try {
-      state = JSON.parse(fs.readFileSync('./sessions/session.json', 'utf-8'));
-    } catch (e) {
-      console.log('No valid session found, creating new one');
-    }
-  }
-  
-  const saveCreds = () => {
-    fs.writeFileSync('./sessions/session.json', JSON.stringify(state, null, 2));
-  };
-  
-  sock = create({
+  sock = makeWASocket({
     auth: state,
     printQRInTerminal: false,
-    logger: require('pino')({ level: 'silent' })
+    logger: require('pino')({ level: 'silent' }),
+    browser: Browsers.ubuntu('Chrome')
   });
 
   // Handle QR Code
   sock.ev.on('connection.update', async (update) => {
     const { connection, qr } = update;
     
-    if (qr) {
+    if (qr && !qrGenerated) {
+      qrGenerated = true;
       // Generate QR untuk web
       try {
         const qrImage = await qrcode.toDataURL(qr);
         io.emit('qr', qrImage);
         io.emit('message', 'Scan QR code to login');
+        console.log('QR code generated for web interface');
       } catch (error) {
         console.log('QR generation error:', error);
       }
@@ -111,14 +53,21 @@ async function initWhatsApp() {
     
     if (connection === 'open') {
       io.emit('message', 'WhatsApp connected successfully!');
-      sessions.set(sock.id, sock);
+      console.log('✅ WhatsApp connected successfully');
       // Simpan credentials
-      saveCreds();
+      await saveCreds();
     }
     
     if (connection === 'close') {
-      io.emit('message', 'WhatsApp disconnected. Refresh to generate new QR.');
-      sessions.delete(sock.id);
+      const shouldReconnect = (update.lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
+      
+      if (shouldReconnect) {
+        console.log('Connection closed, reconnecting...');
+        initWhatsApp();
+      } else {
+        console.log('Connection closed, please restart bot');
+        io.emit('message', 'WhatsApp disconnected. Please restart bot.');
+      }
     }
   });
 
@@ -139,49 +88,30 @@ async function initWhatsApp() {
       
       // Simpan/update user di database
       try {
-        await User.findOneAndUpdate(
-          { userId: user },
-          { $setOnInsert: { createdAt: new Date() } },
-          { upsert: true, new: true }
-        );
+        await db.createUser(user);
+        await db.updateUserLastSeen(user);
       } catch (dbError) {
-        console.log('Database error (non-critical):', dbError.message);
+        console.log('Database error:', dbError.message);
       }
       
       // Process command
-      if (text.startsWith('!')) {
+      if (text && text.startsWith('!')) {
         let response = '';
+        const args = text.slice(1).trim().split(/ +/);
+        const command = args.shift().toLowerCase();
         
-        if (text === '!ping') {
-          response = '🏓 Pong!';
-        } else if (text === '!help') {
-          response = '🤖 T.AI Bot Help:\n\n' +
-                    '• !ping - Test connection\n' +
-                    '• !help - Show this help\n' +
-                    '• !info - Bot information\n' +
-                    '• !owner - Contact owner\n' +
-                    '• !stats - Bot statistics\n' +
-                    'More commands coming soon!';
-        } else if (text === '!info') {
-          response = '🤖 T.AI WhatsApp Bot\n' +
-                    'Version: 1.0.0\n' +
-                    'Multi-tenant friendly\n' +
-                    'Powered by Baileys\n' +
-                    'Deployed on Zeabur';
-        } else if (text === '!owner') {
-          response = `👨‍💻 Owner: ${OWNER_NUMBER}\nHubungi owner untuk info lebih lanjut!`;
-        } else if (text === '!stats') {
-          try {
-            const userCount = await User.countDocuments();
-            response = `📊 Bot Statistics:\n• Users: ${userCount}\n• Status: Connected`;
-          } catch (error) {
-            response = '📊 Bot Statistics:\n• Users: N/A\n• Status: Connected';
-          }
+        // Cek custom commands di database
+        const customCommand = await db.getCommand(command);
+        if (customCommand) {
+          response = customCommand.response;
         } else {
-          response = '❌ Command not found. Type !help for available commands.';
+          // Built-in commands
+          response = await handleBuiltInCommand(command, args, user);
         }
         
-        await sock.sendMessage(jid, { text: response });
+        if (response) {
+          await sock.sendMessage(jid, { text: response });
+        }
       }
     } catch (error) {
       console.log('Message processing error:', error);
@@ -191,6 +121,62 @@ async function initWhatsApp() {
   return sock;
 }
 
+// Handle built-in commands
+async function handleBuiltInCommand(command, args, user) {
+  const ownerNumber = process.env.OWNER_NUMBER || '083131871328';
+  const isOwner = user.includes(ownerNumber);
+  
+  switch (command) {
+    case 'ping':
+      return '🏓 Pong!';
+    
+    case 'help':
+      return '🤖 T.AI Bot Help:\n\n' +
+            '• !ping - Test connection\n' +
+            '• !help - Show this help\n' +
+            '• !info - Bot information\n' +
+            '• !owner - Contact owner\n' +
+            '• !stats - Bot statistics\n' +
+            (isOwner ? '• !addcmd - Add custom command\n' : '') +
+            'More commands coming soon!';
+    
+    case 'info':
+      return '🤖 T.AI WhatsApp Bot\n' +
+            'Version: 1.0.0\n' +
+            'Multi-tenant friendly\n' +
+            'Powered by Baileys + SQLite\n' +
+            'Deployed on Zeabur';
+    
+    case 'owner':
+      return `👨‍💻 Owner: ${ownerNumber}\nHubungi owner untuk info lebih lanjut!`;
+    
+    case 'stats':
+      try {
+        const userCount = await db.countUsers();
+        return `📊 Bot Statistics:\n• Users: ${userCount}\n• Status: Connected\n• Database: SQLite`;
+      } catch (error) {
+        return '📊 Bot Statistics:\n• Users: N/A\n• Status: Connected\n• Database: SQLite';
+      }
+    
+    case 'addcmd':
+      if (!isOwner) return '❌ Hanya owner yang bisa menambah command!';
+      if (args.length < 2) return '❌ Format: !addcmd <nama> <response>';
+      
+      const cmdName = args[0];
+      const cmdResponse = args.slice(1).join(' ');
+      
+      try {
+        await db.createCommand(cmdName, cmdResponse, 'custom', user);
+        return `✅ Command "${cmdName}" berhasil ditambahkan!`;
+      } catch (error) {
+        return '❌ Gagal menambah command.';
+      }
+    
+    default:
+      return '❌ Command not found. Type !help for available commands.';
+  }
+}
+
 // Routes
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
@@ -198,8 +184,9 @@ app.get('/', (req, res) => {
 
 app.get('/api/status', (req, res) => {
   res.json({ 
-    status: sessions.size > 0 ? 'connected' : 'disconnected',
-    message: 'T.AI WhatsApp Bot is running'
+    status: sock && sock.user ? 'connected' : 'disconnected',
+    message: 'T.AI WhatsApp Bot is running',
+    database: 'sqlite'
   });
 });
 
@@ -207,23 +194,21 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     timestamp: new Date().toISOString(),
-    database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
+    whatsapp: sock && sock.user ? 'connected' : 'disconnected',
+    database: 'sqlite'
   });
 });
 
 // Start server
 http.listen(PORT, async () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Health check: http://localhost:${PORT}/health`);
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🌐 Health check: http://localhost:${PORT}/health`);
+  console.log(`📱 QR Interface: http://localhost:${PORT}/`);
   
   try {
-    // Connect to database
-    await connectDB();
-    
     // Initialize WhatsApp
     await initWhatsApp();
     console.log('✅ T.AI Bot initialized successfully');
-    console.log('📱 Open the web interface to scan QR code');
   } catch (error) {
     console.error('❌ Failed to initialize bot:', error);
   }
