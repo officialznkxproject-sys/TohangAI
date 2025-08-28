@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>T.AI - WhatsApp Bot Authentication</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 500px;
+      margin: 0 auto;
+      padding: 20px;
+      text-align: center;
+    }
+    #qr-code {
+      margin: 20px 0;
+    }
+    #status {
+      margin-top: 20px;
+      padding: 10px;
+      border-radius: 5px;
+    }
+    .connected {
+      background-color: #d4edda;
+      color: #155724;
+    }
+    .disconnected {
+      background-color: #f8d7da;
+      color: #721c24;
+    }
+  </style>
+</head>
+<body>
+  <h1>T.AI WhatsApp Bot</h1>
+  <p>Scan QR code below to authenticate:</p>
+  <div id="qr-code"></div>
+  <div id="status">Menunggu koneksi...</div>
+  <div id="message"></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+    const qrContainer = document.getElementById('qr-code');
+    const statusDiv = document.getElementById('status');
+    const messageDiv = document.getElementById('message');
+    
+    socket.on('qr', (qrImage) => {
+      qrContainer.innerHTML = `<img src="${qrImage}" alt="QR Code" />`;
+      statusDiv.textContent = 'Scan QR code to connect';
+      statusDiv.className = 'disconnected';
+    });
+    
+    socket.on('message', (msg) => {
+      messageDiv.textContent = msg;
+    });
+    
+    // Check status periodically
+    setInterval(async () => {
+      try {
+        const response = await fetch('/api/status');
+        const data = await response.json();
+        
+        if (data.status === 'connected') {
+          statusDiv.textContent = 'WhatsApp Connected';
+          statusDiv.className = 'connected';
+          qrContainer.innerHTML = '';
+        }
+      } catch (error) {
+        console.error('Error checking status:', error);
+      }
+    }, 5000);
+  </script>
+</body>
+  </html>
