@@ -1,9 +1,9 @@
 const express = require('express');
 const { create } = require('@whiskeysockets/baileys');
-const { Boom } = require('@hapi/boom');
 const qrcode = require('qrcode');
 const path = require('path');
 const fs = require('fs');
+require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -15,9 +15,8 @@ app.use(express.static('public'));
 // Import config
 const { OWNER_NUMBER } = require('./config/settings');
 
-// Import controllers
-const authController = require('./controllers/authController');
-const commandController = require('./controllers/commandController');
+// Import utils
+const connectDB = require('./utils/database');
 
 // Socket untuk mengirim QR ke frontend
 const http = require('http').createServer(app);
@@ -25,12 +24,26 @@ const io = require('socket.io')(http);
 
 // State management
 let sessions = new Map();
+let sock = null;
 
 // Inisialisasi WhatsApp
 async function initWhatsApp() {
-  const { state, saveCreds } = await authController.useAuth();
+  // Buat folder sessions jika belum ada
+  if (!fs.existsSync('./sessions')) {
+    fs.mkdirSync('./sessions', { recursive: true });
+  }
   
-  const sock = create({
+  let state = {};
+  // Coba load session jika ada
+  if (fs.existsSync('./sessions/session.json')) {
+    state = JSON.parse(fs.readFileSync('./sessions/session.json', 'utf-8'));
+  }
+  
+  const saveCreds = () => {
+    fs.writeFileSync('./sessions/session.json', JSON.stringify(state, null, 2));
+  };
+  
+  sock = create({
     auth: state,
     printQRInTerminal: false,
     logger: require('pino')({ level: 'silent' })
@@ -50,6 +63,8 @@ async function initWhatsApp() {
     if (connection === 'open') {
       io.emit('message', 'WhatsApp connected successfully!');
       sessions.set(sock.id, sock);
+      // Simpan credentials
+      saveCreds();
     }
     
     if (connection === 'close') {
@@ -72,10 +87,27 @@ async function initWhatsApp() {
                 (message.message.extendedTextMessage && message.message.extendedTextMessage.text) || 
                 '';
     
-    // Process command
-    const response = await commandController.processCommand(text, user);
-    
-    if (response) {
+    // Process command sederhana
+    if (text.startsWith('!')) {
+      let response = '';
+      
+      if (text === '!ping') {
+        response = '🏓 Pong!';
+      } else if (text === '!help') {
+        response = '🤖 T.AI Bot Help:\n\n' +
+                  '• !ping - Test connection\n' +
+                  '• !help - Show this help\n' +
+                  '• !info - Bot information\n' +
+                  'More commands coming soon!';
+      } else if (text === '!info') {
+        response = '🤖 T.AI WhatsApp Bot\n' +
+                  'Version: 1.0.0\n' +
+                  'Multi-tenant friendly\n' +
+                  'Powered by Baileys';
+      } else {
+        response = '❌ Command not found. Type !help for available commands.';
+      }
+      
       await sock.sendMessage(jid, { text: response });
     }
   });
@@ -95,5 +127,13 @@ app.get('/api/status', (req, res) => {
 // Start server
 http.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);
-  await initWhatsApp();
+  try {
+    // Connect to database
+    await connectDB();
+    // Initialize WhatsApp
+    await initWhatsApp();
+    console.log('T.AI Bot initialized successfully');
+  } catch (error) {
+    console.error('Failed to initialize bot:', error);
+  }
 });
