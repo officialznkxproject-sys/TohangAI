@@ -18,138 +18,73 @@ class Database {
   init() {
     console.log('📊 Initializing SQLite database...');
     
-    this.db.serialize(() => {
-      // Tabel users
-      this.db.run(`
-        CREATE TABLE IF NOT EXISTS users (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          userId TEXT UNIQUE,
-          name TEXT,
-          role TEXT DEFAULT 'USER',
-          banned INTEGER DEFAULT 0,
-          banReason TEXT,
-          createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
-          lastSeen DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-      `);
+    // Tabel users
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        userId TEXT UNIQUE,
+        name TEXT,
+        role TEXT DEFAULT 'USER',
+        banned INTEGER DEFAULT 0,
+        banReason TEXT,
+        createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+        lastSeen DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
 
-      // Tabel commands (untuk custom commands)
-      this.db.run(`
-        CREATE TABLE IF NOT EXISTS commands (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          name TEXT UNIQUE,
-          response TEXT,
-          category TEXT,
-          createdBy TEXT,
-          createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-      `);
+    // Tabel commands (untuk custom commands)
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS commands (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE,
+        response TEXT,
+        category TEXT,
+        createdBy TEXT,
+        createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
 
-      // Tabel groups
-      this.db.run(`
-        CREATE TABLE IF NOT EXISTS groups (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          groupId TEXT UNIQUE,
-          name TEXT,
-          owner TEXT,
-          enabled INTEGER DEFAULT 1,
-          createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-      `);
-
-      console.log('✅ Database initialized successfully');
-    });
+    console.log('✅ Database initialized successfully');
   }
 
   // User methods
-  async getUser(userId) {
-    return new Promise((resolve, reject) => {
-      this.db.get("SELECT * FROM users WHERE userId = ?", [userId], (err, row) => {
-        if (err) reject(err);
-        else resolve(row);
-      });
-    });
+  getUser(userId, callback) {
+    this.db.get("SELECT * FROM users WHERE userId = ?", [userId], callback);
   }
 
-  async createUser(userId, data = {}) {
-    return new Promise((resolve, reject) => {
-      this.db.run(
-        "INSERT OR IGNORE INTO users (userId, name, role) VALUES (?, ?, ?)",
-        [userId, data.name || '', data.role || 'USER'],
-        function(err) {
-          if (err) reject(err);
-          else resolve(this.lastID);
-        }
-      );
-    });
+  createUser(userId, data = {}, callback) {
+    this.db.run(
+      "INSERT OR IGNORE INTO users (userId, name, role) VALUES (?, ?, ?)",
+      [userId, data.name || '', data.role || 'USER'],
+      callback
+    );
   }
 
-  async updateUserLastSeen(userId) {
-    return new Promise((resolve, reject) => {
-      this.db.run(
-        "UPDATE users SET lastSeen = CURRENT_TIMESTAMP WHERE userId = ?",
-        [userId],
-        function(err) {
-          if (err) reject(err);
-          else resolve(this.changes);
-        }
-      );
-    });
+  updateUserLastSeen(userId, callback) {
+    this.db.run(
+      "UPDATE users SET lastSeen = CURRENT_TIMESTAMP WHERE userId = ?",
+      [userId],
+      callback
+    );
   }
 
-  async countUsers() {
-    return new Promise((resolve, reject) => {
-      this.db.get("SELECT COUNT(*) as count FROM users", (err, row) => {
-        if (err) reject(err);
-        else resolve(row.count);
-      });
+  countUsers(callback) {
+    this.db.get("SELECT COUNT(*) as count FROM users", (err, row) => {
+      callback(err, row ? row.count : 0);
     });
   }
 
   // Command methods
-  async getCommand(name) {
-    return new Promise((resolve, reject) => {
-      this.db.get("SELECT * FROM commands WHERE name = ?", [name], (err, row) => {
-        if (err) reject(err);
-        else resolve(row);
-      });
-    });
+  getCommand(name, callback) {
+    this.db.get("SELECT * FROM commands WHERE name = ?", [name], callback);
   }
 
-  async createCommand(name, response, category = 'custom', createdBy = 'system') {
-    return new Promise((resolve, reject) => {
-      this.db.run(
-        "INSERT OR REPLACE INTO commands (name, response, category, createdBy) VALUES (?, ?, ?, ?)",
-        [name, response, category, createdBy],
-        function(err) {
-          if (err) reject(err);
-          else resolve(this.lastID);
-        }
-      );
-    });
-  }
-
-  // Group methods
-  async getGroup(groupId) {
-    return new Promise((resolve, reject) => {
-      this.db.get("SELECT * FROM groups WHERE groupId = ?", [groupId], (err, row) => {
-        if (err) reject(err);
-        else resolve(row);
-      });
-    });
-  }
-
-  async createGroup(groupId, name, owner) {
-    return new Promise((resolve, reject) => {
-      this.db.run(
-        "INSERT OR IGNORE INTO groups (groupId, name, owner) VALUES (?, ?, ?)",
-        [groupId, name, owner],
-        function(err) {
-          if (err) reject(err);
-          else resolve(this.lastID);
-        }
-      );
-    });
+  createCommand(name, response, category = 'custom', createdBy = 'system', callback) {
+    this.db.run(
+      "INSERT OR REPLACE INTO commands (name, response, category, createdBy) VALUES (?, ?, ?, ?)",
+      [name, response, category, createdBy],
+      callback
+    );
   }
 
   // Close connection
@@ -157,5 +92,60 @@ class Database {
     this.db.close();
   }
 }
+
+// Promisified methods untuk async/await
+Database.prototype.getUserAsync = function(userId) {
+  return new Promise((resolve, reject) => {
+    this.getUser(userId, (err, row) => {
+      if (err) reject(err);
+      else resolve(row);
+    });
+  });
+};
+
+Database.prototype.createUserAsync = function(userId, data = {}) {
+  return new Promise((resolve, reject) => {
+    this.createUser(userId, data, function(err) {
+      if (err) reject(err);
+      else resolve(this.lastID);
+    });
+  });
+};
+
+Database.prototype.updateUserLastSeenAsync = function(userId) {
+  return new Promise((resolve, reject) => {
+    this.updateUserLastSeen(userId, function(err) {
+      if (err) reject(err);
+      else resolve(this.changes);
+    });
+  });
+};
+
+Database.prototype.countUsersAsync = function() {
+  return new Promise((resolve, reject) => {
+    this.countUsers((err, count) => {
+      if (err) reject(err);
+      else resolve(count);
+    });
+  });
+};
+
+Database.prototype.getCommandAsync = function(name) {
+  return new Promise((resolve, reject) => {
+    this.getCommand(name, (err, row) => {
+      if (err) reject(err);
+      else resolve(row);
+    });
+  });
+};
+
+Database.prototype.createCommandAsync = function(name, response, category = 'custom', createdBy = 'system') {
+  return new Promise((resolve, reject) => {
+    this.createCommand(name, response, category, createdBy, function(err) {
+      if (err) reject(err);
+      else resolve(this.lastID);
+    });
+  });
+};
 
 module.exports = new Database();
