@@ -88,8 +88,8 @@ async function initWhatsApp() {
       
       // Simpan/update user di database
       try {
-        await db.createUser(user);
-        await db.updateUserLastSeen(user);
+        await db.createUserAsync(user);
+        await db.updateUserLastSeenAsync(user);
       } catch (dbError) {
         console.log('Database error:', dbError.message);
       }
@@ -101,11 +101,15 @@ async function initWhatsApp() {
         const command = args.shift().toLowerCase();
         
         // Cek custom commands di database
-        const customCommand = await db.getCommand(command);
-        if (customCommand) {
-          response = customCommand.response;
-        } else {
-          // Built-in commands
+        try {
+          const customCommand = await db.getCommandAsync(command);
+          if (customCommand) {
+            response = customCommand.response;
+          } else {
+            // Built-in commands
+            response = await handleBuiltInCommand(command, args, user);
+          }
+        } catch (error) {
           response = await handleBuiltInCommand(command, args, user);
         }
         
@@ -152,7 +156,7 @@ async function handleBuiltInCommand(command, args, user) {
     
     case 'stats':
       try {
-        const userCount = await db.countUsers();
+        const userCount = await db.countUsersAsync();
         return `📊 Bot Statistics:\n• Users: ${userCount}\n• Status: Connected\n• Database: SQLite`;
       } catch (error) {
         return '📊 Bot Statistics:\n• Users: N/A\n• Status: Connected\n• Database: SQLite';
@@ -166,7 +170,7 @@ async function handleBuiltInCommand(command, args, user) {
       const cmdResponse = args.slice(1).join(' ');
       
       try {
-        await db.createCommand(cmdName, cmdResponse, 'custom', user);
+        await db.createCommandAsync(cmdName, cmdResponse, 'custom', user);
         return `✅ Command "${cmdName}" berhasil ditambahkan!`;
       } catch (error) {
         return '❌ Gagal menambah command.';
